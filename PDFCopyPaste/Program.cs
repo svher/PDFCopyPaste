@@ -34,6 +34,7 @@ namespace PDFCopyPaste
             Load += Form1_Load;
             Closed += Form1_Closed;
             Shown += Forms1_Shown;
+            WindowState = FormWindowState.Minimized;
         }
 
         private void Forms1_Shown(object sender, EventArgs e)
@@ -77,30 +78,56 @@ namespace PDFCopyPaste
             switch (m.Msg)
             {
                 case WM_DRAWCLIPBOARD:
-                    //检测文本
-                    IDataObject obj = Clipboard.GetDataObject();
-                    string[] formats = obj.GetFormats();
-                    var owner = GetClipboardOwner();
-                    int pid;
-                    GetWindowThreadProcessId(owner, out pid);
-                    int hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid);
-                    StringBuilder buffer = new StringBuilder();
-                    buffer.EnsureCapacity(100);
-                    GetModuleFileNameEx(hProcess, 0, buffer, 100);
-                    if (buffer.ToString().IndexOf("PDF") != -1 && obj.GetDataPresent("System.String"))
+                    try
                     {
-                        string str = (string)obj.GetData("System.String");
-                        string res = ProcessText(str);
-                        if (res != str)
+                        //检测文本
+                        IDataObject obj = Clipboard.GetDataObject();
+                        string[] formats = obj.GetFormats();
+                        var owner = GetClipboardOwner();
+                        int pid;
+                        GetWindowThreadProcessId(owner, out pid);
+                        int hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid);
+                        StringBuilder buffer = new StringBuilder();
+                        buffer.EnsureCapacity(100);
+                        GetModuleFileNameEx(hProcess, 0, buffer, 100);
+                        if (buffer.ToString().IndexOf("PDF") != -1 && obj.GetDataPresent("System.String"))
                         {
-                            Thread.Sleep(500);
-                            Clipboard.SetDataObject(res, true, 10000, 100);
+                            string str = (string)obj.GetData("System.String");
+                            string res = ProcessText(str);
+                            if (res != str)
+                            {
+                                Thread.Sleep(500);
+                                Clipboard.SetDataObject(res, true, 10000, 100);
+                            }
                         }
+                        else if (owner == IntPtr.Zero && obj.GetDataPresent("System.String"))
+                        {
+                            string str = (string)obj.GetData("System.String");
+                            string res = Regex.Replace(str, "\r\n", "\n");
+                            res = Regex.Replace(res, " +$", "", RegexOptions.Multiline);
+                            if (res != str)
+                            {
+                                Thread.Sleep(500);
+                                Clipboard.SetDataObject(res, true, 10000, 100);
+                            }
+                        }
+                    } catch (Exception e)
+                    {
+                        MessageBox.Show($"{e.GetType()}: {e.Message}\nAborting...", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        Application.Exit();
                     }
                     //将WM_DRAWCLIPBOARD消息传递到下一个观察链中的窗口
                     SendMessage(NextClipHwnd, m.Msg, m.WParam, m.LParam);
                     break;
                 default:
+                    if (m.Msg == Program.WM_PROMPT_EXIT)
+                    {
+                        if (MessageBox.Show("Close PDFCopyPaste?", "Warning", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2)
+                            == DialogResult.Yes)
+                        {
+                            Application.Exit();
+                        }
+                    }
                     base.WndProc(ref m);
                     break;
             }
@@ -120,6 +147,11 @@ namespace PDFCopyPaste
     class Program
     {
         static Mutex m_mutex = new Mutex(false, "{BB20662C-D8CA-4E1B-A1B5-ABDC73D14926}");
+        [DllImport("user32")]
+        public static extern bool PostMessage(IntPtr hwnd, int msg, IntPtr wparam, IntPtr lparam);
+        [DllImport("user32")]
+        public static extern int RegisterWindowMessage(string message);
+        public static int WM_PROMPT_EXIT = RegisterWindowMessage("WM_PROMPT_EXIT");
         [STAThread]
         static void Main(string[] args)
         {
@@ -129,7 +161,7 @@ namespace PDFCopyPaste
                 m_mutex.ReleaseMutex();
             } else
             {
-                MessageBox.Show("Already Running!");
+                PostMessage(new IntPtr(0xffff), WM_PROMPT_EXIT, IntPtr.Zero, IntPtr.Zero);
             }
         }
     }
